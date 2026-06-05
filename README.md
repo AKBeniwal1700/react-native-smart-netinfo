@@ -1,4 +1,4 @@
-# react-native-smart-netinfo
+# @akbeniwal/react-native-smart-netinfo
 
 A lightweight, zero-dependency, smart network connection monitor for React Native and React Native Web. It keeps track of device connectivity, measures latency (ping), rates the connection quality, and automatically/manually estimates download speeds in Mbps.
 
@@ -19,10 +19,10 @@ A lightweight, zero-dependency, smart network connection monitor for React Nativ
 
 ```bash
 # Using npm
-npm install react-native-smart-netinfo
+npm install @akbeniwal/react-native-smart-netinfo
 
 # Using yarn
-yarn add react-native-smart-netinfo
+yarn add @akbeniwal/react-native-smart-netinfo
 ```
 
 ---
@@ -34,7 +34,7 @@ yarn add react-native-smart-netinfo
 Subscribe to network state updates anywhere in your app:
 
 ```typescript
-import { SmartNetInfo, NetworkState } from 'react-native-smart-netinfo';
+import { SmartNetInfo, NetworkState } from '@akbeniwal/react-native-smart-netinfo';
 
 // (Optional) Configure settings
 SmartNetInfo.configure({
@@ -66,7 +66,7 @@ Create a custom hook to use `SmartNetInfo` easily in your React Native component
 
 ```tsx
 import { useEffect, useState } from 'react';
-import { SmartNetInfo, NetworkState } from 'react-native-smart-netinfo';
+import { SmartNetInfo, NetworkState } from '@akbeniwal/react-native-smart-netinfo';
 
 export function useNetworkStatus() {
   const [status, setStatus] = useState<NetworkState>({
