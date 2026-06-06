@@ -1,21 +1,24 @@
-# @akbeniwal/react-native-smart-netinfo
+# 🚀 @akbeniwal/react-native-smart-netinfo
 
-A lightweight, zero-dependency, smart network connection monitor for React Native and React Native Web. It keeps track of device connectivity, measures latency (ping), rates the connection quality, and automatically/manually estimates download speeds in Mbps.
+A completely **Hybrid**, intelligent, and robust network monitoring library for React Native. It tracks internet reachability, network types (Wi-Fi/Cellular), measures real latency (Ping), and can perform bandwidth speed tests.
 
-## Features
-
-- 🌐 **Online/Offline Detection**: Standard and reliable reachability check.
-- ⚡ **Latency Measuring (Ping)**: Periodic background pinging to verify real internet access.
-- 📶 **Connection Quality**: Automatically rates network latency as `'poor' | 'good' | 'excellent'`.
-- 🚀 **Speed Test**: Estimate download throughput speed (in Mbps) by downloading a configurable asset.
-- 🔄 **Auto Speed Test**: Automatically run speed test when transitioning from offline to online.
-- 📱 **Foreground Check**: Recheck connectivity instantly when the app transitions back to the foreground.
-- 🕸️ **Web Compatibility**: Smooth fallback and support for browser online/offline events (perfect for React Native Web).
-- 🧩 **Zero Native Dependencies**: No need for linking or dealing with native pods. Uses standard `fetch` and `AppState`.
+By leveraging **Native iOS/Android OS Events** combined with a **JavaScript Polling Fallback**, it guarantees **Zero Battery Drain** while offline, while maintaining bulletproof real-time connection status when online.
 
 ---
 
-## Installation
+## ✨ Features
+
+- 🔋 **Zero Battery Drain (Offline):** When the OS reports the device as offline, the JS polling stops completely, saving battery.
+- 📡 **Network Type Detection:** Identifies whether the user is on **`wifi`**, **`cellular`**, or **`none`**.
+- 🌐 **Bulletproof Online Check:** Even if the OS says "Connected", the library pings a reliable server in the background to verify _actual_ internet reachability.
+- ⚡ **Real-time Latency (Ping):** Accurately tracks connection speed in milliseconds.
+- 📶 **Connection Quality:** Automatically classifies the connection as `'poor' | 'good' | 'excellent'`.
+- 🚀 **Manual/Auto Speed Testing:** Estimate actual download throughput (Mbps) by downloading a configurable asset.
+- 📱 **Hybrid Architecture:** Built natively using `NWPathMonitor` (iOS) and `ConnectivityManager` (Android), seamlessly bridged to JavaScript via TurboModules/Codegen.
+
+---
+
+## 📦 Installation
 
 ```bash
 # Using npm
@@ -25,110 +28,92 @@ npm install @akbeniwal/react-native-smart-netinfo
 yarn add @akbeniwal/react-native-smart-netinfo
 ```
 
+### iOS Setup
+
+This package uses advanced Native Codegen. You **must** run CocoaPods:
+
+```bash
+cd ios
+pod install
+cd ..
+```
+
+_(Android is auto-linked, no extra steps required)._
+
 ---
 
-## Usage
+## 💻 Usage
 
-### 1. Basic Event Subscription (TypeScript/JavaScript)
+### 1. Basic Setup & Event Subscription
 
-Subscribe to network state updates anywhere in your app:
+You can subscribe to network state changes anywhere in your code. The most common place is your root `App.tsx` or a global state manager.
 
 ```typescript
-import { SmartNetInfo, NetworkState } from '@akbeniwal/react-native-smart-netinfo';
+import {
+  SmartNetInfo,
+  NetworkState,
+} from "@akbeniwal/react-native-smart-netinfo";
 
-// (Optional) Configure settings
+// 1. (Optional) Configure default intervals
 SmartNetInfo.configure({
-  pingIntervalMs: 30000, // Ping check every 30 seconds
-  timeoutMs: 5000,
+  pingIntervalMs: 10000, // Check internet every 10 seconds (Recommended)
+  timeoutMs: 5000, // Max time to wait for a ping response
   speedTestFileSizeInBytes: 90000,
-  disableAutoSpeedTest: false, // Automatically run speed test on online transition
+  disableAutoSpeedTest: true, // Set to true to prevent random data usage
 });
 
-// Subscribe to state updates
+// 2. Subscribe to live changes
 const unsubscribe = SmartNetInfo.addEventListener((state: NetworkState) => {
-  console.log('Is connected:', state.isConnected);
-  console.log('Is internet reachable:', state.isInternetReachable);
-  console.log('Latency (ms):', state.latencyMs);
-  console.log('Connection Quality:', state.connectionQuality); // 'excellent' | 'good' | 'poor'
-  console.log('Internet Speed (Mbps):', state.internetSpeed);
-  console.log('Is Speed Testing:', state.isTestingSpeed);
+  console.log("Connected to Router/Tower?", state.isConnected);
+  console.log("Actual Internet Reachable?", state.isInternetReachable);
+  console.log("Network Type:", state.type); // 'wifi' | 'cellular' | 'none'
+  console.log("Latency (ms):", state.latencyMs);
+  console.log("Quality:", state.connectionQuality); // 'excellent' | 'good' | 'poor'
 });
 
-// Unsubscribe later to clean up
-unsubscribe();
+// Remember to unsubscribe when your component unmounts
+// unsubscribe();
 ```
 
 ---
 
-### 2. React Hook Integration
+### 2. Manual Network Verification & Speed Tests
 
-Create a custom hook to use `SmartNetInfo` easily in your React Native components:
+If you want to manually force an immediate connectivity check (for example, right before a user clicks "Submit Payment"), you can use `fetch()`.
 
 ```tsx
-import { useEffect, useState } from 'react';
-import { SmartNetInfo, NetworkState } from '@akbeniwal/react-native-smart-netinfo';
+import React, from 'react';
+import { View, Button, Alert } from 'react-native';
+import { SmartNetInfo } from '@akbeniwal/react-native-smart-netinfo';
 
-export function useNetworkStatus() {
-  const [status, setStatus] = useState<NetworkState>({
-    isConnected: null,
-    isInternetReachable: null,
-    latencyMs: null,
-    connectionQuality: null,
-    internetSpeed: null,
-    isTestingSpeed: false,
-  });
+export default function CheckoutScreen() {
 
-  useEffect(() => {
-    const unsubscribe = SmartNetInfo.addEventListener((nextState) => {
-      setStatus(nextState);
-    });
+  const handlePayment = async () => {
+    // Force an immediate check before critical operations
+    const state = await SmartNetInfo.fetch();
 
-    return () => {
-      unsubscribe();
-    };
-  }, []);
+    if (!state.isInternetReachable) {
+      Alert.alert('Error', 'No active internet connection. Please try again.');
+      return;
+    }
 
-  return {
-    ...status,
-    runSpeedTest: () => SmartNetInfo.runSpeedTest(),
+    if (state.type === 'cellular' && state.connectionQuality === 'poor') {
+      Alert.alert('Warning', 'Your cellular connection is very poor. Payment might fail.');
+    }
+
+    // Process payment...
   };
-}
-```
 
-Then use it inside any component:
-
-```tsx
-import React from 'react';
-import { View, Text, Button, ActivityIndicator } from 'react-native';
-import { useNetworkStatus } from './useNetworkStatus';
-
-export default function ConnectionScreen() {
-  const {
-    isConnected,
-    isInternetReachable,
-    latencyMs,
-    connectionQuality,
-    internetSpeed,
-    isTestingSpeed,
-    runSpeedTest
-  } = useNetworkStatus();
+  const testSpeed = async () => {
+    // Only run this manually when the user clicks a button!
+    const mbps = await SmartNetInfo.runSpeedTest();
+    Alert.alert('Download Speed', `Your speed is approx ${mbps} Mbps`);
+  };
 
   return (
-    <View style={{ padding: 20, alignItems: 'center', justifyContent: 'center', flex: 1 }}>
-      <Text style={{ fontSize: 20, fontWeight: 'bold' }}>
-        Network: {isConnected ? 'Connected' : 'Disconnected'}
-      </Text>
-      
-      <Text>Internet Reachable: {isInternetReachable ? 'Yes' : 'No'}</Text>
-      <Text>Latency: {latencyMs ? `${latencyMs}ms` : 'Calculating...'}</Text>
-      <Text>Quality: {connectionQuality ? connectionQuality.toUpperCase() : 'Calculating...'}</Text>
-      <Text>Speed: {internetSpeed ? `${internetSpeed} Mbps` : 'No speed test run yet'}</Text>
-      
-      {isTestingSpeed ? (
-        <ActivityIndicator size="small" color="#0000ff" />
-      ) : (
-        <Button title="Test Speed Now" onPress={runSpeedTest} disabled={!isInternetReachable} />
-      )}
+    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+      <Button title="Pay Now" onPress={handlePayment} />
+      <Button title="Run Speed Test" onPress={testSpeed} />
     </View>
   );
 }
@@ -136,39 +121,55 @@ export default function ConnectionScreen() {
 
 ---
 
-## API Reference
+## 📖 API Reference
 
 ### `SmartNetInfo.configure(config: Partial<SmartNetInfoConfig>): void`
-Customizes settings. If the monitor is currently running, configuring settings will restart the monitoring session using the updated configurations.
+
+Customizes default settings. Calling this while monitoring is active will seamlessly restart the polling loop with the new configurations.
 
 ### `SmartNetInfo.fetch(): Promise<NetworkState>`
-Forces an immediate network latency check and returns the latest `NetworkState`.
+
+Forces an immediate background network check and returns a Promise with the latest accurate `NetworkState`.
 
 ### `SmartNetInfo.addEventListener(listener: NetworkStateListener): () => void`
-Subscribes a listener to network changes. Returns an `unsubscribe` function. If monitoring is not active, calling this will automatically start monitoring.
 
-### `SmartNetInfo.removeEventListener(listener: NetworkStateListener): void`
-Manually unsubscribes a listener. If all listeners are removed, it automatically stops background monitoring, cleaning up timers and system hooks.
+Subscribes a callback to receive real-time network changes. Calling this automatically activates the native OS listeners and JS background loop. Returns an `unsubscribe` function.
 
 ### `SmartNetInfo.runSpeedTest(): Promise<number | null>`
-Manually initiates a speed test, downloads the speed test asset, updates the state (`internetSpeed` and `isTestingSpeed`), and returns the estimated speed in Mbps.
 
-### `SmartNetInfo.startMonitoring(): void`
-Manually starts monitoring. You normally don't need to call this manually unless you are calling `fetch()` without subscriptions and want background polling active.
-
-### `SmartNetInfo.stopMonitoring(): void`
-Manually stops monitoring, cleaning up timers, AppState listeners, and window listeners.
+Initiates a manual speed test. It updates the state's `internetSpeed` and `isTestingSpeed` flags in real-time, and resolves with the final Mbps value.
 
 ---
 
-## Types
+## ⚠️ Critical Safety & Usage Warnings
+
+Please read these warnings carefully before integrating the package into your production app.
+
+> [!CAUTION]
+> **Avoid Aggressive Polling:**
+> By default, the `pingIntervalMs` is set to `10000` (10 seconds). Do **NOT** set this to less than 5 seconds. Pinging too aggressively (e.g., every 1 second) will cause massive battery drain, thermal throttling, and may get your app rate-limited by the DNS/Ping server.
+
+> [!WARNING]
+> **Beware of Data Consumption:**
+> The `runSpeedTest()` function physically downloads a file (default 90KB) to calculate Mbps. **NEVER** run this inside a fast `useEffect` loop or on every screen load. It will rapidly consume the user's mobile data quota.
+
+> [!IMPORTANT]
+> **Native Rebuilds are Mandatory:**
+> Because this package relies on Native C++ (iOS) and Kotlin (Android) code, simply reloading Metro (pressing `r`) is **NOT** enough after installation or updates.
+> You **MUST** run `pod install` in the `ios` directory, and perform a completely **Clean Build** via Xcode or Android Studio. If you don't rebuild natively, the app will crash or return `type: "unknown"`.
+
+---
+
+## 🏷️ TypeScript Types
 
 ```typescript
-export type ConnectionQuality = 'poor' | 'good' | 'excellent';
+export type NetworkType = "wifi" | "cellular" | "none" | "unknown";
+export type ConnectionQuality = "poor" | "good" | "excellent";
 
 export interface NetworkState {
   isConnected: boolean | null;
   isInternetReachable: boolean | null;
+  type: NetworkType;
   latencyMs: number | null;
   connectionQuality: ConnectionQuality | null;
   internetSpeed: number | null;
@@ -176,13 +177,23 @@ export interface NetworkState {
 }
 
 export interface SmartNetInfoConfig {
-  pingIntervalMs?: number; // Background checking frequency in ms (default: 30000)
-  timeoutMs?: number; // Request timeout in ms (default: 5000)
-  speedTestFileSizeInBytes?: number; // Expected file size (default: 90000)
-  disableAutoSpeedTest?: boolean; // If true, only speed test when runSpeedTest() is called (default: false)
+  pingIntervalMs?: number;
+  timeoutMs?: number;
+  speedTestFileSizeInBytes?: number;
+  disableAutoSpeedTest?: boolean;
 }
 ```
 
-## License
+---
+
+## 📜 License
 
 MIT © akbeniwal
+
+---
+
+## 👨‍💻 Author
+
+**Abhishek Beniwal**
+
+- NPM: [@akbeniwal](https://www.npmjs.com/~akbeniwal)

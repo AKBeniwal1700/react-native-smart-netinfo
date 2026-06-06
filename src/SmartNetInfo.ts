@@ -1,15 +1,23 @@
-import { AppState, AppStateStatus } from 'react-native';
+import { AppState, AppStateStatus, NativeEventEmitter } from 'react-native';
+import NativeReactNativeSmartNetinfo from './NativeReactNativeSmartNetinfo';
 import { NetworkState, SmartNetInfoConfig, NetworkStateListener } from './types';
 import { getConnectionQuality } from './utils/getConnectionQuality';
 import { getLatency } from './utils/getLatency';
 import { runSpeedTest as executeSpeedTest } from './utils/runSpeedTest';
 
-const PING_URL = 'https://clients3.google.com/generate_204';
+const PING_URLS = [
+  'https://clients3.google.com/generate_204',
+  'https://www.apple.com/library/test/success.html',
+  'https://cloudflare-dns.com/dns-query',
+  'https://google.com/generate_204'
+];
+
 const SPEED_TEST_URL = 'https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.min.js';
 
 class SmartNetInfoManager {
+  private pingUrlIndex = 0;
   private config: Required<SmartNetInfoConfig> = {
-    pingIntervalMs: 30000,
+    pingIntervalMs: 10000,
     timeoutMs: 5000,
     speedTestFileSizeInBytes: 90000,
     disableAutoSpeedTest: false,
@@ -18,6 +26,7 @@ class SmartNetInfoManager {
   private state: NetworkState = {
     isConnected: null,
     isInternetReachable: null,
+    type: 'unknown',
     latencyMs: null,
     connectionQuality: null,
     internetSpeed: null,
@@ -25,9 +34,12 @@ class SmartNetInfoManager {
   };
 
   private listeners = new Set<NetworkStateListener>();
-  private intervalId: ReturnType<typeof setInterval> | null = null;
+  private timeoutId: ReturnType<typeof setTimeout> | null = null;
   private appStateSubscription: { remove: () => void } | null = null;
+  private nativeEventEmitter: NativeEventEmitter | null = null;
+  private nativeEventSubscription: { remove: () => void } | null = null;
   private isMonitoring = false;
+  private isChecking = false;
 
   /**
    * Configure the SmartNetInfo options.
@@ -94,7 +106,8 @@ class SmartNetInfoManager {
 
     this.updateState({ isTestingSpeed: true });
     
-    const speed = await executeSpeedTest(SPEED_TEST_URL, this.config.speedTestFileSizeInBytes);
+    const timeout = Math.max(this.config.timeoutMs * 3, 15000);
+    const speed = await executeSpeedTest(SPEED_TEST_URL, this.config.speedTestFileSizeInBytes, timeout);
     
     this.updateState({
       internetSpeed: speed,
@@ -111,7 +124,20 @@ class SmartNetInfoManager {
     if (this.isMonitoring) return;
     this.isMonitoring = true;
 
-    // Run initial check immediately
+    // Set up Native Event Emitter if available
+    try {
+      if (NativeReactNativeSmartNetinfo) {
+        this.nativeEventEmitter = new NativeEventEmitter(NativeReactNativeSmartNetinfo as any);
+        this.nativeEventSubscription = this.nativeEventEmitter.addListener(
+          'NetworkStatusChanged',
+          this.handleNativeNetworkChange
+        );
+      }
+    } catch (e) {
+      console.warn('SmartNetInfo native module not found, falling back to pure polling');
+    }
+
+    // Run initial check immediately and then schedule subsequent checks
     this.checkConnectivity().then(() => {
       // Auto run speed test on initial connect if online
       if (
@@ -121,12 +147,8 @@ class SmartNetInfoManager {
       ) {
         this.runSpeedTest();
       }
+      this.scheduleNextCheck();
     });
-
-    // Set up periodic polling
-    if (this.config.pingIntervalMs > 0) {
-      this.intervalId = setInterval(() => this.checkConnectivity(), this.config.pingIntervalMs);
-    }
 
     // React Native AppState listener to detect foreground transitions
     try {
@@ -150,9 +172,14 @@ class SmartNetInfoManager {
     if (!this.isMonitoring) return;
     this.isMonitoring = false;
 
-    if (this.intervalId) {
-      clearInterval(this.intervalId);
-      this.intervalId = null;
+    if (this.timeoutId) {
+      clearTimeout(this.timeoutId);
+      this.timeoutId = null;
+    }
+
+    if (this.nativeEventSubscription) {
+      this.nativeEventSubscription.remove();
+      this.nativeEventSubscription = null;
     }
 
     if (this.appStateSubscription) {
@@ -172,15 +199,41 @@ class SmartNetInfoManager {
     }
   }
 
+  private handleNativeNetworkChange = (event: { isConnected: boolean, type?: any }) => {
+    if (!event.isConnected) {
+      this.updateState({
+        isConnected: false,
+        isInternetReachable: false,
+        type: 'none',
+        latencyMs: null,
+        connectionQuality: null,
+      });
+      if (this.timeoutId) {
+        clearTimeout(this.timeoutId);
+        this.timeoutId = null;
+      }
+      this.scheduleNextCheck();
+    } else {
+      this.updateState({ isConnected: true, type: event.type || 'unknown' });
+      this.checkConnectivity().finally(() => {
+        this.scheduleNextCheck();
+      });
+    }
+  };
+
   private handleAppStateChange = (nextAppState: AppStateStatus): void => {
     if (nextAppState === 'active') {
-      this.checkConnectivity();
+      this.checkConnectivity().finally(() => {
+        this.scheduleNextCheck();
+      });
     }
   };
 
   private handleWebOnline = (): void => {
     this.updateState({ isConnected: true, isInternetReachable: true });
-    this.checkConnectivity();
+    this.checkConnectivity().finally(() => {
+      this.scheduleNextCheck();
+    });
   };
 
   private handleWebOffline = (): void => {
@@ -192,26 +245,80 @@ class SmartNetInfoManager {
     });
   };
 
+  private scheduleNextCheck(): void {
+    if (!this.isMonitoring) return;
+
+    if (this.timeoutId) {
+      clearTimeout(this.timeoutId);
+      this.timeoutId = null;
+    }
+
+    if (this.config.pingIntervalMs <= 0) return;
+
+    // We always keep polling as a bulletproof fallback, even if native module says offline.
+    // If the native module misses an event, polling will catch the recovery.
+
+    // When offline (without native fallback), check more frequently (every 3 seconds) to detect recovery quickly.
+    // When online, use the configured pingIntervalMs.
+    const isOffline = this.state.isInternetReachable === false;
+    const interval = isOffline
+      ? Math.min(this.config.pingIntervalMs, 3000)
+      : this.config.pingIntervalMs;
+
+    this.timeoutId = setTimeout(async () => {
+      await this.checkConnectivity();
+      this.scheduleNextCheck();
+    }, interval);
+  }
+
   private async checkConnectivity(): Promise<void> {
-    const { isReachable, latencyMs } = await getLatency(PING_URL, this.config.timeoutMs);
-    
-    const wasInternetReachable = this.state.isInternetReachable;
+    if (this.isChecking) return;
+    this.isChecking = true;
 
-    this.updateState({
-      isConnected: isReachable,
-      isInternetReachable: isReachable,
-      latencyMs,
-      connectionQuality: getConnectionQuality(latencyMs),
-    });
+    try {
+      // Add a buffer to timeout when we are currently offline to allow the radio to wake up
+      const isCurrentlyOffline = this.state.isInternetReachable === false;
+      const actualTimeout = isCurrentlyOffline
+        ? Math.max(this.config.timeoutMs, 4000)
+        : this.config.timeoutMs;
 
-    // If internet just became reachable and we haven't run speed test yet, trigger auto speed test
-    if (
-      isReachable &&
-      wasInternetReachable === false &&
-      this.state.internetSpeed === null &&
-      !this.config.disableAutoSpeedTest
-    ) {
-      this.runSpeedTest();
+      const currentPingUrl = PING_URLS[this.pingUrlIndex];
+      // Cycle to the next URL for the next check to avoid DNS caching issues if it fails
+      this.pingUrlIndex = (this.pingUrlIndex + 1) % PING_URLS.length;
+
+      const { isReachable, latencyMs } = await getLatency(currentPingUrl, actualTimeout);
+      
+      const wasInternetReachable = this.state.isInternetReachable;
+
+      let nextIsConnected = this.state.isConnected;
+      if (isReachable) {
+        nextIsConnected = true;
+      } else if (this.nativeEventEmitter && this.state.isConnected !== null) {
+        nextIsConnected = this.state.isConnected;
+      } else {
+        nextIsConnected = false;
+      }
+
+      this.updateState({
+        isConnected: nextIsConnected,
+        isInternetReachable: isReachable,
+        latencyMs,
+        connectionQuality: getConnectionQuality(latencyMs),
+      });
+
+      // If internet just became reachable and we haven't run speed test yet, trigger auto speed test
+      if (
+        isReachable &&
+        wasInternetReachable === false &&
+        this.state.internetSpeed === null &&
+        !this.config.disableAutoSpeedTest
+      ) {
+        this.runSpeedTest();
+      }
+    } catch (error) {
+      console.warn('SmartNetInfo failed during checkConnectivity:', error);
+    } finally {
+      this.isChecking = false;
     }
   }
 

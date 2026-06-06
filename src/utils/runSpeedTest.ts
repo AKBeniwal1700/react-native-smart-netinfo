@@ -8,13 +8,23 @@
  */
 export async function runSpeedTest(
   speedTestUrl: string,
-  speedTestFileSizeInBytes: number
+  speedTestFileSizeInBytes: number,
+  timeoutMs: number = 15000
 ): Promise<number | null> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
   try {
     const startTime = Date.now();
+    const controller = new AbortController();
     
-    const response = await fetch(speedTestUrl, {
+    timeoutId = setTimeout(() => {
+      controller.abort();
+    }, timeoutMs);
+    
+    const uniqueUrl = `${speedTestUrl}${speedTestUrl.includes('?') ? '&' : '?'}t=${Date.now()}&r=${Math.random().toString().slice(2)}`;
+    
+    const response = await fetch(uniqueUrl, {
       method: 'GET',
+      signal: controller.signal,
       headers: {
         'Cache-Control': 'no-cache, no-store, must-revalidate',
         'Pragma': 'no-cache',
@@ -42,5 +52,9 @@ export async function runSpeedTest(
   } catch (error) {
     console.warn('Network speed test failed:', error);
     return null;
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
   }
 }
